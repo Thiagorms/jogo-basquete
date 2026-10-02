@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Basquete 2D - 3 Pontos</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#10131a;color:#fff;font-family:Arial,sans-serif;display:flex;justify-content:center;min-height:100vh}
+.wrap{width:min(1100px,100%);padding:18px}.top{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:12px;flex-wrap:wrap}
+h1{margin:0;font-size:24px}.info{display:flex;gap:12px;flex-wrap:wrap}.pill{background:#1b2230;padding:8px 12px;border-radius:10px}
+.gamebox{position:relative;background:#c88a4a;border-radius:16px;overflow:hidden;box-shadow:0 15px 50px #0008}
+canvas{display:block;width:100%;height:auto;background:#c88a4a}
+.help{padding:12px;background:#171c27;border-radius:0 0 16px 16px;line-height:1.5}
+.powerbox{margin-top:12px;background:#171c27;padding:12px;border-radius:12px}.bar{height:22px;background:#303846;border-radius:999px;overflow:hidden}.fill{height:100%;width:10%;background:linear-gradient(90deg,#4ade80,#facc15,#ef4444);transition:none}.powerline{display:flex;justify-content:space-between;margin-bottom:7px;font-weight:bold}
+button{background:#f59e0b;color:#111;border:0;border-radius:9px;padding:9px 14px;font-weight:bold;cursor:pointer}
+.status{font-size:14px;color:#cbd5e1}
+.player-select{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.player-select button{background:#303846;color:#fff;border:2px solid transparent}
+.player-select button.active{background:#f59e0b;color:#111;border-color:#fff}
+
+@media(max-width:600px){h1{font-size:19px}.wrap{padding:8px}.help{font-size:13px}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="top">
+    <h1>🏀 Basquete 2D — 3 Pontos</h1>
+    <div class="info">
+      <div class="pill">Tentativas: <b id="shots">0/10</b></div>
+      <div class="pill">Cestas: <b id="made">0</b></div>
+      <div class="player-select">
+      <button id="common" class="active">👤 Comum</button>
+      <button id="pro">⭐ Profissional</button>
+    </div>
+    <button id="reset">Reiniciar</button>
+    </div>
+  </div>
+
+  <div class="gamebox"><canvas id="game" width="1000" height="620"></canvas></div>
+
+  <div class="powerbox">
+    <div class="powerline"><span>FORÇA — segure ESPAÇO</span><span id="pct">10%</span></div>
+    <div class="bar"><div class="fill" id="fill"></div></div>
+    <div class="status" id="status">Setas: mover jogador • Segure ESPAÇO e solte para arremessar</div>
+  </div>
+  <div class="help">
+    <b>Regra da força:</b> abaixo de <b>50%</b> a bola não chega à cesta. Entre 50% e 100%, ela chega; quanto mais perto da força ideal, maior a chance de acertar.
+  </div>
+</div>
+
+<script>
+const c=document.getElementById('game'),ctx=c.getContext('2d');
+const W=c.width,H=c.height;
+const hoop={x:88,y:H/2};
+const player={x:790,y:H/2,r:20};
+const defender={x:640,y:H/2,vx:0,vy:0};
+let keys={},charging=false,chargeStart=0,power=10,shots=0,made=0,ball=null,last=performance.now();
+
+const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+const dist=(a,b)=>Math.hypot(a.x-b.x,a.y-b.y);
+
+function reset(){
+ shots=0;made=0;power=10;ball=null;player.x=790;player.y=H/2;defender.x=640;defender.y=H/2;
+ updateUI(); setStatus('Setas: mover jogador • Segure ESPAÇO e solte para arremessar');
+}
+let playerType='common';
+
+document.getElementById('common').onclick=()=>{
+  playerType='common';
+  document.getElementById('common').classList.add('active');
+  document.getElementById('pro').classList.remove('active');
+  setStatus('Jogador Comum selecionado.');
+  reset();
+};
+document.getElementById('pro').onclick=()=>{
+  playerType='pro';
+  document.getElementById('pro').classList.add('active');
+  document.getElementById('common').classList.remove('active');
+  setStatus('Jogador Profissional selecionado.');
+  reset();
+};
+document.getElementById('reset').onclick=reset;
+
+addEventListener('keydown',e=>{
+ keys[e.key]=true;
+ if(e.code==='Space'){e.preventDefault(); if(!charging && !ball && shots<10) startCharge();}
+});
+addEventListener('keyup',e=>{
+ keys[e.key]=false;
+ if(e.code==='Space'){e.preventDefault(); if(charging) releaseShot();}
+});
+
+function startCharge(){
+ charging=true;chargeStart=performance.now();power=10;setStatus('Carregando força...');
+}
+function releaseShot(){
+ charging=false;
+ shoot(power);
+}
+function shoot(p){
+ shots++;
+
+ // A bola SEMPRE aponta para a cesta. A força só determina a distância.
+ const dx=hoop.x-player.x;
+ const dy=hoop.y-player.y;
+ const distance=Math.hypot(dx,dy);
+ const ux=dx/distance, uy=dy/distance;
+
+ const reaches=p>=50;
+ // Abaixo de 50%, ela percorre apenas parte do caminho até a cesta.
+ const travel= reaches ? distance : distance*clamp(0.22+(p/50)*0.72,0.22,0.94);
+
+ const targetX=player.x+ux*travel;
+ const targetY=player.y+uy*travel;
+
+ // Tempo suficiente para enxergar claramente a trajetória.
+ const duration=reaches ? 1.25-(p-50)*0.003 : 1.05;
+ const vx=(targetX-player.x)/duration;
+ const vy=(targetY-player.y)/duration;
+
+ ball={
+   x:player.x,y:player.y,z:0,
+   vx:vx,vy:vy,
+   vz:-520,
+   r:11,life:0,
+   duration:duration,
+   targetX:targetX,targetY:targetY,
+   reaches:reaches,
+   willScore:false
+ };
+
+ // Acerto totalmente aleatório quando a bola chega à cesta.
+ // A força não aumenta nem diminui a precisão.
+ ball.willScore=reaches && Math.random()<0.50;
+
+ updateUI();
+ setStatus(reaches?'Arremesso direto para a cesta!':'Muito fraco — a bola vai na direção da cesta, mas cai antes.');
+}
+function updateUI(){
+ document.getElementById('shots').textContent=shots+'/10';
+ document.getElementById('made').textContent=made;
+ document.getElementById('pct').textContent=Math.round(power)+'%';
+ document.getElementById('fill').style.width=power+'%';
+}
+function setStatus(s){document.getElementById('status').textContent=s}
+
+function update(dt){
+ if(charging){
+   power=clamp(10+(performance.now()-chargeStart)/22,10,100);
+   updateUI();
+ }
+ if(!ball){
+   const sp=280;
+   if(keys.ArrowLeft||keys.a)player.x-=sp*dt;
+   if(keys.ArrowRight||keys.d)player.x+=sp*dt;
+   if(keys.ArrowUp||keys.w)player.y-=sp*dt;
+   if(keys.ArrowDown||keys.s)player.y+=sp*dt;
+   player.x=clamp(player.x,360,W-45);player.y=clamp(player.y,95,H-95);
+ }
+ // Defensor com aceleração e limite de velocidade para marcação fluida.
+ const tx=clamp(player.x-125,350,W-170),ty=player.y;
+ const ax=(tx-defender.x)*7-defender.vx*4;
+ const ay=(ty-defender.y)*7-defender.vy*4;
+ defender.vx+=ax*dt;defender.vy+=ay*dt;
+ const vmax=245,vm=Math.hypot(defender.vx,defender.vy);
+ if(vm>vmax){defender.vx=defender.vx/vm*vmax;defender.vy=defender.vy/vm*vmax}
+ defender.x+=defender.vx*dt;defender.y+=defender.vy*dt;
+
+ if(ball){
+   ball.life+=dt;
+
+   // Movimento matematicamente reto: nunca há deslocamento lateral.
+   const t=clamp(ball.life/ball.duration,0,1);
+   ball.x=player.x+(ball.targetX-player.x)*t;
+   ball.y=player.y+(ball.targetY-player.y)*t;
+
+   // Arco visual da bola, sem alterar sua direção horizontal.
+   const arc=Math.sin(Math.PI*t)*(80+power*0.35);
+   ball.z=arc;
+
+   if(t>=1){
+     if(ball.reaches){
+       if(ball.willScore){
+         made++;
+         setStatus('🏀 CESTA!');
+       }else{
+         setStatus('Quase! A bola chegou na cesta, mas errou o aro.');
+       }
+     }else{
+       setStatus('A bola ficou curta e caiu antes da cesta.');
+     }
+     ball=null;
+     updateUI();
+   }
+ }
+}
+
+function court(){
+ ctx.clearRect(0,0,W,H);
+ ctx.fillStyle='#c98a4b';ctx.fillRect(0,0,W,H);
+ // tábuas
+ ctx.strokeStyle='rgba(80,40,15,.18)';ctx.lineWidth=2;
+ for(let x=0;x<W;x+=55){ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,H);ctx.stroke()}
+ ctx.strokeStyle='#fff';ctx.lineWidth=5;ctx.strokeRect(22,22,W-44,H-44);
+ // garrafão
+ ctx.strokeRect(22,H/2-105,220,210);
+ ctx.beginPath();ctx.arc(242,H/2,105,-Math.PI/2,Math.PI/2);ctx.stroke();
+ // círculo central
+ ctx.beginPath();ctx.arc(W/2,H/2,75,0,Math.PI*2);ctx.stroke();
+ // linha de 3 simplificada
+ ctx.beginPath();ctx.moveTo(280,70);ctx.lineTo(280,H-70);ctx.stroke();
+ // cesta
+ ctx.fillStyle='#222';ctx.fillRect(47,H/2-70,10,140);
+ ctx.fillStyle='#ddd';ctx.fillRect(42,H/2-82,18,164);
+ ctx.strokeStyle='#f97316';ctx.lineWidth=8;ctx.beginPath();ctx.arc(hoop.x,hoop.y,18,0,Math.PI*2);ctx.stroke();
+ ctx.strokeStyle='#fff';ctx.lineWidth=2;
+ for(let i=-12;i<=12;i+=6){ctx.beginPath();ctx.moveTo(hoop.x+i,hoop.y+5);ctx.lineTo(hoop.x+i/2,hoop.y+30);ctx.stroke()}
+}
+function circle(x,y,r,fill,stroke='#111'){
+ ctx.beginPath();ctx.arc(x,y,r,0,Math.PI*2);ctx.fillStyle=fill;ctx.fill();ctx.strokeStyle=stroke;ctx.lineWidth=3;ctx.stroke();
+}
+function draw(){
+ court();
+ // sombra e jogador
+ ctx.globalAlpha=.2;circle(player.x+5,player.y+8,player.r,'#000','#000');ctx.globalAlpha=1;
+ circle(player.x,player.y,player.r,'#2563eb');
+ ctx.fillStyle='#fff';ctx.font='bold 12px Arial';ctx.textAlign='center';ctx.fillText(playerType==='pro'?'PRO':'COMUM',player.x,player.y+4);
+ // defensor
+ circle(defender.x,defender.y,18,'#dc2626');ctx.fillStyle='#fff';ctx.fillText('DEF',defender.x,defender.y+4);
+ if(ball){
+   const bz=ball.z;
+   ctx.globalAlpha=.18;circle(ball.x+6,ball.y+8,ball.r,'#000','#000');ctx.globalAlpha=1;
+   circle(ball.x,ball.y-bz,ball.r,'#f97316','#7c2d12');
+   ctx.strokeStyle='#7c2d12';ctx.lineWidth=2;ctx.beginPath();ctx.arc(ball.x,ball.y-bz,ball.r*.65,-.8,1.2);ctx.stroke();
+ }
+ // trajeto previsto
+ if(charging&&!ball){
+   ctx.save();ctx.setLineDash([7,8]);ctx.strokeStyle='rgba(255,255,255,.55)';ctx.lineWidth=3;
+   ctx.beginPath();ctx.moveTo(player.x,player.y);
+   let reach,ry;
+   if(power>=50){ reach=hoop.x; ry=hoop.y; }
+   else{
+     const t=clamp(0.28+(power/50)*0.60,0.28,0.88);
+     const dx=hoop.x-player.x,dy=hoop.y-player.y,d=Math.hypot(dx,dy);
+     reach=player.x+(dx/d)*(d*t); ry=player.y+(dy/d)*(d*t);
+   }
+   ctx.lineTo(reach,ry);ctx.stroke();ctx.restore();
+ }
+}
+function loop(t){
+ const dt=Math.min((t-last)/1000,.033);last=t;update(dt);draw();requestAnimationFrame(loop);
+}
+reset();requestAnimationFrame(loop);
+</script>
+</body>
+</html>
